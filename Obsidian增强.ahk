@@ -11,7 +11,6 @@ global obsidianPath := "C:\Program Files\Obsidian\Obsidian.exe"  ; 默认路径�
 global obsidianProcess := "Obsidian.exe"
 global obsidianVisible := false  ; 控制Obsidian是否可见
 global obsidianRunning := false  ; 控制Obsidian是否运行
-global overlayGui := Map()  ; 将overlayGui设为全局变量
 global processCheckTimer := 0  ; 用于存储进程检查定时器ID
 
 ; 加载配置文件
@@ -40,6 +39,9 @@ AutoStartObsidian()  ; 添加自动启动功能
 
 ; 启动进程监控
 SetTimer(MonitorObsidianProcess, 1000)  ; 每秒检查一次进程状态
+
+; 启动鼠标位置监控
+SetTimer(CheckMousePosition, 100)  ; 每100毫秒检查一次鼠标位置
 
 ; 更新托盘菜单状态
 UpdateTrayMenu() {
@@ -118,7 +120,7 @@ CheckObsidian() {
 
 ; 切换Obsidian显示状态
 ToggleObsidian(*) {
-    global obsidianRunning, obsidianVisible, overlayGui
+    global obsidianRunning, obsidianVisible
     
     if !obsidianRunning || !ProcessExist(obsidianProcess) {
         StartObsidian()
@@ -135,10 +137,6 @@ ToggleObsidian(*) {
             ; 只隐藏主窗口，不隐藏仓库选择窗口
             if title != "" && title != "Obsidian" {
                 WinHide("ahk_id " hwnd)
-                ; 同时隐藏对应的覆盖窗口
-                if overlayGui.Has(hwnd) {
-                    overlayGui[hwnd].Hide()
-                }
             }
         }
         obsidianVisible := false
@@ -164,16 +162,6 @@ ToggleObsidian(*) {
                 WinShow("ahk_id " hwnd)
                 WinActivate("ahk_id " hwnd)
                 hasShownWindow := true
-                
-                ; 确保覆盖窗口也显示出来
-                if overlayGui.Has(hwnd) {
-                    ; 更新覆盖窗口位置
-                    WinGetPos(&x, &y, &width, &height, "ahk_id " hwnd)
-                    buttonSize := 42
-                    closeButtonX := x + width - buttonSize - 10
-                    closeButtonY := y + 0
-                    overlayGui[hwnd].Show("x" closeButtonX " y" closeButtonY " w" buttonSize " h" buttonSize " NoActivate")
-                }
             }
         }
         
@@ -221,9 +209,6 @@ StartObsidian(*) {
     
     ; 更新托盘菜单状态
     UpdateTrayMenu()
-    
-    ; 延迟初始化覆盖按钮
-    SetTimer(InitCloseButtonOverride, -1000)
 }
 
 ; 重启Obsidian
@@ -243,17 +228,6 @@ RestartObsidian() {
     StartObsidian()
 }
 
-; 清理所有覆盖窗口
-CleanupOverlayWindows() {
-    global overlayGui
-    ; 销毁所有覆盖窗口
-    for hwnd, gui in overlayGui {
-        gui.Destroy()
-    }
-    ; 清空Map
-    overlayGui.Clear()
-}
-
 ; 关闭Obsidian
 CloseObsidian(*) {
     global obsidianRunning, obsidianVisible
@@ -265,9 +239,6 @@ CloseObsidian(*) {
     
     result := MsgBox("确定要关闭Obsidian吗？", "确认", "YesNo")
     if result = "Yes" {
-        ; 清理覆盖窗口
-        CleanupOverlayWindows()
-        
         ProcessClose(obsidianProcess)
         obsidianRunning := false
         obsidianVisible := false
@@ -291,8 +262,6 @@ ExitScript(*) {
         return
     } else if result = "Yes" {
         if ProcessExist(obsidianProcess) {
-            ; 清理覆盖窗口
-            CleanupOverlayWindows()
             ProcessClose(obsidianProcess)
         }
     } else {
@@ -317,9 +286,6 @@ ExitScript(*) {
                 }
             }
         }
-        
-        ; 清理覆盖窗口
-        CleanupOverlayWindows()
     }
     
     ExitApp()
@@ -356,9 +322,6 @@ AutoStartObsidian() {
         
         ; 更新托盘菜单状态
         UpdateTrayMenu()
-        
-        ; 初始化关闭按钮覆盖
-        InitCloseButtonOverride()
     } else {
         ; Obsidian未运行，启动它
         Run(obsidianPath)
@@ -395,220 +358,143 @@ AutoStartObsidian() {
             
             ; 更新托盘菜单状态
             UpdateTrayMenu()
-            
-            ; 初始化关闭按钮覆盖
-            InitCloseButtonOverride()
         } catch {
             TrayTip("Obsidian增强脚本", "启动Obsidian超时", 3)
         }
     }
 }
 
-; 检查Obsidian窗口并覆盖关闭按钮
-CheckAndOverrideCloseButton() {
-    global obsidianRunning, overlayGui, obsidianProcess
+; 检查鼠标位置并处理关闭按钮点击
+CheckMousePosition() {
+    global obsidianRunning, obsidianProcess
+    static inCloseButton := false  ; 静态变量，记录鼠标是否在关闭按钮区域
     
     if !obsidianRunning || !ProcessExist(obsidianProcess) {
-        CleanupOverlayWindows()
         return
     }
     
+    ; 设置坐标模式为屏幕
     CoordMode("Mouse", "Screen")
-    MouseGetPos(&mouseX, &mouseY, &mouseWin)
     
-    windowList := WinGetList("ahk_exe " obsidianProcess)
-    currentWindows := Map()
+    ; 获取鼠标位置和当前窗口
+    MouseGetPos(&mx, &my, &_WinId)
     
-    for hwnd in windowList {
-        title := WinGetTitle("ahk_id " hwnd)
-        if title != "" && title != "Obsidian" {
-            currentWindows[hwnd] := true
-            
-            isVisible := DllCall("IsWindowVisible", "Ptr", hwnd)
-            
-            if !isVisible {
-                if overlayGui.Has(hwnd) {
-                    try overlayGui[hwnd].Hide()
-                }
-                continue
-            }
-            
-            WinGetPos(&x, &y, &width, &height, "ahk_id " hwnd)
-            
-            buttonSize := 42
-            padding := 5  ; 增加5像素的检测边距
-            closeButtonX := x + width - buttonSize - 10
-            closeButtonY := y + 0
-            
-            isMouseInCloseButton := (mouseX >= closeButtonX - padding && mouseX <= closeButtonX + buttonSize + padding && 
-                                   mouseY >= closeButtonY - padding && mouseY <= closeButtonY + buttonSize + padding)
-            
-            if isMouseInCloseButton {
-                if !overlayGui.Has(hwnd) {
-                    try {
-                        ; 创建覆盖窗口
-                        overlayGui[hwnd] := Gui("-Caption +AlwaysOnTop +ToolWindow +Owner" hwnd)
-                        overlayGui[hwnd].BackColor := "FF0000"
-                        overlayGui[hwnd].MarginX := 0
-                        overlayGui[hwnd].MarginY := 0
-                        
-                        ; 添加按钮
-                        btn := overlayGui[hwnd].Add("Button", "x0 y0 w" buttonSize " h" buttonSize " -Border")
-                        btn.Opt("+Background" overlayGui[hwnd].BackColor)
-                        
-                        ; 保存当前窗口句柄，避免闭包问题
-                        currentHwnd := hwnd
-                        
-                        ; 设置左键点击事件（隐藏窗口）
-                        try {
-                            btn.OnEvent("Click", HideObsidianCallback.Bind(currentHwnd))
-                            LogMessage("成功为窗口 " currentHwnd " 绑定左键点击事件")
-                        } catch as err {
-                            LogMessage("为窗口 " currentHwnd " 绑定左键点击事件失败: " err.Message)
-                        }
-                        
-                        ; 设置右键点击事件（关闭窗口）
-                        try {
-                            btn.OnEvent("ContextMenu", CloseObsidianCallback.Bind(currentHwnd))
-                            LogMessage("成功为窗口 " currentHwnd " 绑定右键点击事件")
-                        } catch as err {
-                            LogMessage("为窗口 " currentHwnd " 绑定右键点击事件失败: " err.Message)
-                        }
-                    } catch as err {
-                        LogMessage("创建覆盖窗口失败: " err.Message)
-                    }
-                }
-                
-                try {
-                    overlayGui[hwnd].Show("x" closeButtonX " y" closeButtonY " w" buttonSize " h" buttonSize " NoActivate")
-                } catch as err {
-                    LogMessage("显示覆盖窗口失败: " err.Message)
-                }
-            } else {
-                if overlayGui.Has(hwnd) {
-                    try overlayGui[hwnd].Hide()
-                    catch as err {
-                        LogMessage("隐藏覆盖窗口失败: " err.Message)
-                    }
-                }
-            }
+    ; 获取窗口信息
+    WinGetPos(&x, &y, &w, &h, "ahk_id " _WinId)
+    
+    ; 获取窗口程序名
+    program := WinGetProcessName("ahk_id " _WinId)
+    
+    ; 如果不是Obsidian窗口，直接返回
+    if (program != obsidianProcess) {
+        if (inCloseButton) {
+            ; 如果之前在关闭按钮区域，现在不是Obsidian窗口，清除状态
+            ToolTip()
+            Hotkey("LButton", "Off")
+            Hotkey("RButton", "Off")
+            inCloseButton := false
         }
+        return
     }
     
-    ; 清理不再存在的窗口的覆盖
-    for hwnd in overlayGui {
-        if !currentWindows.Has(hwnd) {
-            try {
-                overlayGui[hwnd].Destroy()
-                overlayGui.Delete(hwnd)
-            } catch as err {
-                LogMessage("清理覆盖窗口失败: " err.Message)
-            }
+    ; 获取系统边框和标题栏尺寸
+    SM_CXSIZEFRAME := DllCall("GetSystemMetrics", "Int", 32)
+    SM_CYSIZEFRAME := DllCall("GetSystemMetrics", "Int", 33)
+    SM_CXSIZE := DllCall("GetSystemMetrics", "Int", 30)
+    SM_CYSIZE := DllCall("GetSystemMetrics", "Int", 31)
+    
+    ; 计算关闭按钮区域
+    l := x + w - SM_CXSIZEFRAME - SM_CXSIZE - 10
+    t := y - SM_CYSIZEFRAME
+    r := x + w - SM_CXSIZEFRAME
+    b := y + SM_CYSIZE + SM_CYSIZEFRAME
+    
+    ; 判断鼠标是否在关闭按钮区域内
+    if (mx >= l && mx <= r && my >= t && my <= b) {
+        ; 如果之前不在关闭按钮区域，现在进入了
+        if (!inCloseButton) {
+            ; 显示提示
+            ToolTip("左键：最小化到托盘`n右键：关闭窗口")
+            
+            ; 保存当前窗口ID，用于回调函数
+            global currentObsidianWindow := _WinId
+            
+            ; 设置左键点击事件
+            Hotkey("LButton", HideObsidianWindow, "On")
+            
+            ; 设置右键点击事件
+            Hotkey("RButton", CloseObsidianWindow, "On")
+            
+            inCloseButton := true
+            LogMessage("鼠标进入关闭按钮区域，已启用左右键事件")
+        }
+    } else {
+        ; 如果之前在关闭按钮区域，现在离开了
+        if (inCloseButton) {
+            ; 清除提示
+            ToolTip()
+            
+            ; 关闭左键点击事件
+            Hotkey("LButton", "Off")
+            
+            ; 关闭右键点击事件
+            Hotkey("RButton", "Off")
+            
+            inCloseButton := false
+            LogMessage("鼠标离开关闭按钮区域，已禁用左右键事件")
         }
     }
 }
 
-; 回调函数：隐藏Obsidian窗口
-HideObsidianCallback(hwnd, ctrl, *) {
-    global overlayGui  ; 使用全局的overlayGui
+; 隐藏Obsidian窗口（点击关闭按钮时）
+HideObsidianWindow(*) {
+    global currentObsidianWindow
     
     ; 检查窗口是否存在
-    if !WinExist("ahk_id " hwnd) {
-        LogMessage("尝试隐藏不存在的窗口，hwnd: " hwnd)
+    if !WinExist("ahk_id " currentObsidianWindow) {
+        ToolTip()
         return
     }
     
-    ; 隐藏Obsidian窗口
-    try {
-        WinHide("ahk_id " hwnd)
-        LogMessage("成功隐藏Obsidian窗口，hwnd: " hwnd)
-    } catch as err {
-        LogMessage("隐藏Obsidian窗口失败: " err.Message)
-    }
-    
-    ; 隐藏对应的覆盖窗口
-    if overlayGui.Has(hwnd) {
-        try {
-            overlayGui[hwnd].Hide()
-        } catch as err {
-            LogMessage("隐藏覆盖窗口失败: " err.Message)
-        }
-    }
+    ; 隐藏窗口
+    WinHide("ahk_id " currentObsidianWindow)
     
     ; 更新状态
-    global obsidianVisible
-    obsidianVisible := false
+    global obsidianVisible := false
+    
+    ; 清除提示
+    ToolTip()
+    
+    LogMessage("用户点击关闭按钮，隐藏了Obsidian窗口")
 }
 
-; 回调函数：关闭Obsidian窗口（右键点击时调用）
-CloseObsidianCallback(hwnd, ctrl, *) {
-    global overlayGui, obsidianRunning, obsidianVisible, obsidianProcess
+; 关闭Obsidian窗口（右键点击关闭按钮时）
+CloseObsidianWindow(*) {
+    global currentObsidianWindow
     
-    ; 先检查窗口是否存在
-    if !WinExist("ahk_id " hwnd) {
-        LogMessage("尝试关闭不存在的窗口，hwnd: " hwnd)
-        
-        ; 清理覆盖窗口
-        if overlayGui.Has(hwnd) {
-            overlayGui[hwnd].Destroy()
-            overlayGui.Delete(hwnd)
-        }
+    ; 检查窗口是否存在
+    if !WinExist("ahk_id " currentObsidianWindow) {
+        ToolTip()
         return
     }
     
-    ; 关闭Obsidian窗口
-    try {
-        WinClose("ahk_id " hwnd)
-        LogMessage("成功关闭Obsidian窗口，hwnd: " hwnd)
-    } catch as err {
-        LogMessage("关闭Obsidian窗口失败: " err.Message)
-    }
+    ; 关闭窗口
+    WinClose("ahk_id " currentObsidianWindow)
     
-    ; 如果是最后一个窗口，更新状态
+    ; 清除提示
+    ToolTip()
+    
+    LogMessage("用户右键点击关闭按钮，关闭了Obsidian窗口")
+    
+    ; 检查是否还有其他Obsidian窗口
     windowList := WinGetList("ahk_exe " obsidianProcess)
     if windowList.Length = 0 {
-        obsidianRunning := false
-        obsidianVisible := false
+        ; 如果没有其他窗口，更新状态
+        global obsidianRunning := false
+        global obsidianVisible := false
         
         ; 更新托盘菜单状态
         UpdateTrayMenu()
-    }
-    
-    ; 清理覆盖窗口
-    if overlayGui.Has(hwnd) {
-        overlayGui[hwnd].Destroy()
-        overlayGui.Delete(hwnd)
-    }
-    
-    LogMessage("用户通过右键点击覆盖按钮关闭了Obsidian窗口")
-}
-
-; 初始化关闭按钮拦截
-InitCloseButtonOverride() {
-    global processCheckTimer
-    
-    ; 停止现有的定时器（如果有）
-    if processCheckTimer {
-        SetTimer(CheckAndOverrideCloseButton, 0)
-    }
-    
-    ; 启动新的定时器
-    SetTimer(CheckAndOverrideCloseButton, 100)
-    processCheckTimer := 1
-}
-
-; 热键：Win+Z 切换Obsidian可见性
-#z::ToggleObsidian()
-
-; 添加一个新的热键来真正关闭Obsidian窗口（用于测试）
-#!z::
-{
-    ; 清理覆盖窗口
-    CleanupOverlayWindows()
-    
-    windowList := WinGetList("ahk_exe " obsidianProcess)
-    for hwnd in windowList {
-        WinClose("ahk_id " hwnd)
     }
 }
 
@@ -624,19 +510,24 @@ MonitorObsidianProcess() {
         ; Obsidian刚刚启动
         obsidianRunning := true
         UpdateTrayMenu()
-        InitCloseButtonOverride()
     } 
     else if (!isRunning && obsidianRunning) {
         ; Obsidian已经退出
         obsidianRunning := false
         obsidianVisible := false
-        CleanupOverlayWindows()
         UpdateTrayMenu()
-        
-        ; 如果定时器还在运行，停止它
-        if processCheckTimer {
-            SetTimer(CheckAndOverrideCloseButton, 0)
-        }
+    }
+}
+
+; 热键：Win+Z 切换Obsidian可见性
+#z::ToggleObsidian()
+
+; 添加一个新的热键来真正关闭Obsidian窗口（用于测试）
+#!z::
+{
+    windowList := WinGetList("ahk_exe " obsidianProcess)
+    for hwnd in windowList {
+        WinClose("ahk_id " hwnd)
     }
 }
 
