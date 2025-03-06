@@ -1,0 +1,29 @@
+# AutoHotkey
+*.exe
+*.log
+*.bak
+
+# 编辑器临时文件
+*.swp
+*~
+.vscode/
+.idea/
+
+# Windows系统文件
+Thumbs.db
+desktop.ini
+
+# 调试和日志文件
+debug.log
+error.log
+*.debug
+logs/
+
+# 临时文件
+temp/
+tmp/
+*.tmp
+
+# 个人配置文件
+config.local.ahk
+settings.local.ini
